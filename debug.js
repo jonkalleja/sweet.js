@@ -8,7 +8,8 @@ process:
 	node-debug debug.js
 */
 
-var compile = require('./build/src/sweet-loader.js').default;
+require('babel-register');
+var compile = require('./src/sweet-loader.js').default;
 
 debugger;
 

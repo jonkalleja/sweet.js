@@ -13,8 +13,9 @@ import { evalCompiletimeValue } from './load-syntax';
 import {  freshScope } from "./scope";
 import { ALL_PHASES } from './syntax';
 import ASTDispatcher from './ast-dispatcher';
-import { collectBindings } from './hygiene-utils';
 import Syntax from './syntax.js';
+import ScopeReducer from './scope-reducer';
+
 
 class RegisterBindingsReducer extends Term.CloneReducer {
   useScope: any;
@@ -167,13 +168,13 @@ export default class TokenExpander extends ASTDispatcher {
     });
   }
 
-  expandFunctionDeclaration(term) {
+  expandFunctionDeclaration(term: Term) {
     return this.registerFunctionOrClass(term);
   }
 
   // TODO: think about function expressions
 
-  expandImport(term) {
+  expandImport(term: Term) {
     let path = term.moduleSpecifier.val();
     let mod;
     if (term.forSyntax) {
@@ -188,7 +189,7 @@ export default class TokenExpander extends ASTDispatcher {
     return removeNames(term, boundNames);
   }
 
-  expandExport(term) {
+  expandExport(term: Term) {
     if (T.isFunctionDeclaration(term.declaration) || T.isClassDeclaration(term.declaration)) {
       return term.extend({
         declaration: this.registerFunctionOrClass(term.declaration)
@@ -213,7 +214,7 @@ export default class TokenExpander extends ASTDispatcher {
   // }],
 
 
-  registerFunctionOrClass(term) {
+  registerFunctionOrClass(term: Term) {
     let red = new RegisterBindingsReducer(
       this.context.useScope,
       this.context.phase,
@@ -226,7 +227,7 @@ export default class TokenExpander extends ASTDispatcher {
     });
   }
 
-  registerVariableDeclaration(term) {
+  registerVariableDeclaration(term: Term) {
     if (term.kind === 'syntax' || term.kind === 'syntaxrec') {
       return this.registerSyntaxDeclaration(term);
     }
@@ -246,13 +247,14 @@ export default class TokenExpander extends ASTDispatcher {
     });
   }
 
-  registerSyntaxDeclaration(term) {
+  registerSyntaxDeclaration(term: Term) {
     if (term.kind === 'syntax') {
       // syntax id^{a, b} = <init>^{a, b}
       // ->
       // syntaxrec id^{a,b,c} = function() { return <<id^{a}>> }
       // syntaxrec id^{a,b} = <init>^{a,b,c}
       let scope = freshScope('nonrec');
+      let scopeReducer = new ScopeReducer([{ scope: scope, phase: ALL_PHASES, flip: false }], this.context.bindings);
       term = term.extend({
         declarators: term.declarators.map(decl => {
           let name = decl.binding.name;
@@ -261,7 +263,7 @@ export default class TokenExpander extends ASTDispatcher {
           let newBinding = gensym(name.val());
           this.context.bindings.addForward(nameAdded, nameRemoved, newBinding, this.context.phase);
           return decl.extend({
-            init: decl.init.addScope(scope, this.context.bindings, ALL_PHASES)
+            init: decl.init.reduce(scopeReducer)
           });
         })
       });
@@ -277,6 +279,7 @@ export default class TokenExpander extends ASTDispatcher {
           env: new Env(),
           store: this.context.store
         }));
+
         let init = syntaxExpander.expand(decl.init);
         let val = evalCompiletimeValue(init, _.merge(this.context, {
           phase: this.context.phase + 1

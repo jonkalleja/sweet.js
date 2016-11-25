@@ -1,4 +1,3 @@
-syntaxrec m = function(ctx) {
-  return #`200`;
+function f(x) {
+  x;
 }
-m

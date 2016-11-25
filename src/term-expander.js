@@ -1,7 +1,6 @@
 import { List } from 'immutable';
 import Term, * as T from "sweet-spec";
 import { freshScope } from "./scope";
-import ApplyScopeInParamsReducer from "./apply-scope-in-params-reducer";
 import Compiler from './compiler';
 import Syntax, { ALL_PHASES } from "./syntax";
 import { serializer } from "./serializer";
@@ -9,6 +8,9 @@ import { Enforester } from "./enforester";
 import { processTemplate } from './template-processor';
 import ASTDispatcher from './ast-dispatcher';
 import ScopeAddingReducer from './scope-adding-reducer';
+import ScopeReducer from './scope-reducer';
+import { gensym } from "./symbol";
+import { VarBindingTransform } from "./transforms";
 
 export default class TermExpander extends ASTDispatcher {
   constructor(context) {
@@ -21,6 +23,14 @@ export default class TermExpander extends ASTDispatcher {
   }
 
   expandPragma(term) {
+    return term;
+  }
+
+  expandRawSyntax(term) {
+    return term;
+  }
+
+  expandRawDelimiter(term) {
     return term;
   }
 
@@ -88,6 +98,10 @@ export default class TermExpander extends ASTDispatcher {
       items: term.items.map(i => this.expand(i)),
       rest
     });
+  }
+
+  expandArrowExpressionE(term) {
+    return this.doFunctionExpansion(term, 'ArrowExpression');
   }
 
   expandArrowExpression(term) {
@@ -257,7 +271,7 @@ export default class TermExpander extends ASTDispatcher {
     let compiler = new Compiler(this.context.phase, this.context.env, this.context.store, this.context);
 
     let markedBody, bodyTerm;
-    markedBody = term.statements.map(b => b.addScope(scope, this.context.bindings, ALL_PHASES));
+    markedBody = term.statements.map(b => b.reduce(new ScopeReducer([{scope, phase: ALL_PHASES, flip: false}], this.context.bindings)));
     bodyTerm = new T.Block({
       statements: compiler.compile(markedBody)
     });
@@ -307,16 +321,20 @@ export default class TermExpander extends ASTDispatcher {
   }
 
   expandSyntaxTemplate(term) {
-    let r = processTemplate(term.template.inner());
-    let str = serializer.write(r.template);
-    let callee = new T.IdentifierExpression({ name: Syntax.from("identifier", 'syntaxTemplate') });
+    let r = processTemplate(term.template.slice(1, term.template.size - 1));
+    let ident = this.context.getTemplateIdentifier();
+    this.context.templateMap.set(ident, r.template);
+
+    let callee = new T.IdentifierExpression({
+      name: term.template.first().value.fromIdentifier('syntaxTemplate')
+    });
 
     let expandedInterps = r.interp.map(i => {
       let enf = new Enforester(i, List(), this.context);
       return this.expand(enf.enforest('expression'));
     });
 
-    let args = List.of(new T.LiteralStringExpression({value: str }))
+    let args = List.of(new T.LiteralNumericExpression({ value: ident }))
                    .concat(expandedInterps);
 
     return new T.CallExpression({
@@ -512,18 +530,35 @@ export default class TermExpander extends ASTDispatcher {
   doFunctionExpansion(term, type) {
     let scope = freshScope("fun");
     let params;
+    let self = this;
     if (type !== 'Getter' && type !== 'Setter') {
-      params = this.expand(term.params);
+      // TODO: need to register the parameter bindings again
+      params = term.params.reduce(new class extends Term.CloneReducer {
+        reduceBindingIdentifier(term) {
+          let name = term.name.addScope(scope, self.context.bindings, ALL_PHASES);
+          let newBinding = gensym(name.val());
+
+          self.context.env.set(newBinding.toString(), new VarBindingTransform(name))
+          self.context.bindings.add(name, {
+            binding: newBinding,
+            phase: self.context.phase,
+            skipDup: true
+          });
+          return new T.BindingIdentifier({ name });
+        }
+      });
+      params = this.expand(params);
     }
     this.context.currentScope.push(scope);
     let compiler = new Compiler(this.context.phase, this.context.env, this.context.store, this.context);
 
     let markedBody, bodyTerm;
+    let scopeReducer = new ScopeReducer([{ scope, phase: ALL_PHASES, flip: false }], this.context.bindings);
     if (term.body instanceof Term) {
       // Arrow functions have a single term as their body
-      bodyTerm = this.expand(term.body.reduce(new ScopeAddingReducer(scope, this.context.bindings, ALL_PHASES)));
+      bodyTerm = this.expand(term.body.reduce(scopeReducer));
     } else {
-      markedBody = term.body.map(b => b.addScope(scope, this.context.bindings, ALL_PHASES));
+      markedBody = term.body.map(b => b.reduce(scopeReducer));
       bodyTerm = new T.FunctionBody({
         directives: List(),
         statements: compiler.compile(markedBody)
@@ -586,11 +621,11 @@ export default class TermExpander extends ASTDispatcher {
     return this.doFunctionExpansion(term, 'Getter');
   }
 
-  expandFunctionDeclaration(term) {
+  expandFunctionDeclarationE(term) {
     return this.doFunctionExpansion(term, "FunctionDeclaration");
   }
 
-  expandFunctionExpression(term) {
+  expandFunctionExpressionE(term) {
     return this.doFunctionExpansion(term, "FunctionExpression");
   }
 

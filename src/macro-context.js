@@ -1,18 +1,17 @@
-import { expect } from './errors';
+import { assert, expect } from './errors';
 import { List } from 'immutable';
 import { Enforester } from './enforester';
 import { ALL_PHASES } from './syntax';
 import * as _ from 'ramda';
+import ScopeReducer from './scope-reducer';
+import * as T from 'sweet-spec';
 
 const symWrap = Symbol('wrapper');
 const privateData = new WeakMap();
 
 const getVal = t => {
-  if (t.match("delimiter")) {
-    return null;
-  }
-  if (typeof t.val === 'function') {
-    return t.val();
+  if (t instanceof T.RawSyntax) {
+    return t.value.val();
   }
   return null;
 };
@@ -25,6 +24,7 @@ export class SyntaxOrTermWrapper {
 
   from(type, value) {
     let stx = this[symWrap];
+    assert(false, 'Need to wrap in RawSyntax');
     if (typeof stx.from === 'function') {
       return stx.from(type, value);
     }
@@ -150,11 +150,11 @@ export class SyntaxOrTermWrapper {
 
   inner() {
     let stx = this[symWrap];
-    if (!stx.match("delimiter")) {
+    if (!(stx instanceof T.RawDelimiter)) {
       throw new Error('Can only get inner syntax on a delimiter');
     }
 
-    let enf = new Enforester(stx.inner(), List(), this.context);
+    let enf = new Enforester(stx.inner.slice(1, stx.inner.size - 1), List(), this.context);
     return new MacroContext(enf, 'inner', this.context);
   }
 }
@@ -357,9 +357,10 @@ export default class MacroContext {
     }
     let value = enf.advance();
     if (!noScopes) {
-      value = value
-        .addScope(useScope, context.bindings, ALL_PHASES)
-        .addScope(introducedScope, context.bindings, ALL_PHASES, { flip: true });
+      value = value.reduce(new ScopeReducer([
+        { scope: useScope, phase: ALL_PHASES, flip: false },
+        { scope: introducedScope, phase: ALL_PHASES, flip: true}
+      ], context.bindings));
     }
     return {
       done: false,

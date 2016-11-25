@@ -98,6 +98,19 @@ ${result}`);
   return cb(output);
 }
 
+export function evalWithOutput(t, input, expected) {
+  testEval(input, output => t.is(output, expected));
+}
+evalWithOutput.title = (title, input, expected) => `${title}
+${input}
+> ${expected}`
+
+export function evalThrows(t, input) {
+  t.throws(() => testEval(input, () => {}));
+}
+evalThrows.title = (title, input) => `${title}
+${input}
+> should have thrown`
 
 export function testThrow(source) {
   // expect(() => compile(source, { cwd: '.', transform})).to.throwError();

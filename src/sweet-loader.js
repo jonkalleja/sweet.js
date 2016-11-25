@@ -1,3 +1,4 @@
+// @flow
 import { Modules } from './modules';
 import Reader from './shift-reader';
 import { Scope, freshScope } from './scope';
@@ -7,22 +8,51 @@ import { List } from 'immutable';
 import Compiler from './compiler';
 import { ALL_PHASES } from './syntax';
 import BindingMap from './binding-map.js';
+import Term, * as S from 'sweet-spec';
 import SweetModule from './sweet-module';
 import * as _ from 'ramda';
-import * as T from './terms';
+import Syntax from './syntax';
+import ScopeReducer from './scope-reducer';
 
 const phaseInModulePathRegexp = /(.*):(\d+)\s*$/;
 
-const isCompiletimeItem = _.either(T.isCompiletimeStatement, T.isExportSyntax);
+function wrapInTerms(stx: List<Syntax>): List<Term> {
+  return stx.map(s => {
+    if (s.isTemplate()) {
+      s.token.items = s.token.items.map(t => {
+        if (t instanceof Syntax) {
+          return wrapInTerms(List.of(t)).first();
+        }
+        return t;
+      });
+    } else if (s.isParens() || s.isBraces() || s.isBrackets() || s.isSyntaxTemplate()) {
+      return new S.RawDelimiter({
+        kind: s.isBraces() ? 'braces' : s.isParens() ? 'parens' : s.isBrackets() ? 'brackets' : 'syntaxTemplate',
+        inner: wrapInTerms(s.token)
+      });
+    }
+    return new S.RawSyntax({
+      value: s
+    });
+  });
+}
 
 export class SweetLoader {
+  sourceCache: Map<string, string>;
+  compiledCache: Map<string, SweetModule>;
+  context: any;
+
   constructor() {
     this.sourceCache = new Map();
     this.compiledCache = new Map();
 
     let bindings = new BindingMap();
+    let templateMap = new Map();
+    let tempIdent = 0;
     this.context = {
       bindings,
+      templateMap,
+      getTemplateIdentifier: () => ++tempIdent,
       loader: this,
       transform: c => {
         return { code: c };
@@ -30,7 +60,7 @@ export class SweetLoader {
     };
   }
 
-  normalize(name, refererName, refererAddress) {
+  normalize(name: string, refererName?: string, refererAddress?: string) {
     // takes `..path/to/source.js:<phase>`
     // gives `/abs/path/to/source.js:<phase>`
     // missing phases are turned into 0
@@ -40,7 +70,7 @@ export class SweetLoader {
     return name;
   }
 
-  locate({name, metadata}) {
+  locate({name, metadata}: {name: string, metadata: {}}) {
     // takes `/abs/path/to/source.js:<phase>`
     // gives { path: '/abs/path/to/source.js', phase: <phase> }
     let match = name.match(phaseInModulePathRegexp);
@@ -54,9 +84,10 @@ export class SweetLoader {
     throw new Error(`Module ${name} is missing phase information`);
   }
 
-  fetch({name, address, metadata}) {
-    if (this.sourceCache.has(address.path)) {
-      return this.sourceCache.get(address.path);
+  fetch({name, address, metadata}: {name: string, address: {path: string, phase: number}, metadata: {}}) {
+    let src = this.sourceCache.get(address.path);
+    if (src != null) {
+      return src;
     } else {
       let data = require('fs').readFileSync(address.path, 'utf8');
       this.sourceCache.set(address.path, data);
@@ -64,20 +95,21 @@ export class SweetLoader {
     }
   }
 
-  translate({name, address, source, metadata}) {
-    if (this.compiledCache.has(address.path)) {
-      return this.compiledCache.get(address.path);
+  translate({name, address, source, metadata}: {name: string, address: {path: string, phase: number}, source: string, metadata: {}}) {
+    let src = this.compiledCache.get(address.path)
+    if (src != null) {
+      return src;
     }
     let compiledModule = this.compileSource(source);
     this.compiledCache.set(address.path, compiledModule);
     return compiledModule;
   }
 
-  instantiate({name, address, source, metadata}) {
+  instantiate({name, address, source, metadata}: {name: string, address: {path: string, phase: number}, source: SweetModule, metadata: {}}) {
     throw new Error('Not implemented yet');
   }
 
-  load(entryPath) {
+  load(entryPath: string) {
     let metadata = {};
     let name = this.normalize(entryPath);
     let address = this.locate({ name, metadata });
@@ -87,7 +119,7 @@ export class SweetLoader {
   }
 
   // skip instantiate
-  compile(entryPath) {
+  compile(entryPath: string) {
     let metadata = {};
     let name = this.normalize(entryPath);
     let address = this.locate({ name, metadata });
@@ -95,11 +127,11 @@ export class SweetLoader {
     return this.translate({ name, address, source, metadata });
   }
 
-  read(source) {
-    return new Reader(source).read();
+  read(source: string): List<Term> {
+    return wrapInTerms(new Reader(source).read());
   }
 
-  compileSource(source) {
+  compileSource(source: string) {
     let stxl = this.read(source);
     let outScope = freshScope('outsideEdge');
     let inScope = freshScope('insideEdge0');
@@ -107,24 +139,25 @@ export class SweetLoader {
     let compiler = new Compiler(0, new Env(), new Store(),  _.merge(this.context, {
       currentScope: [outScope, inScope],
     }));
-    let mod = new SweetModule(compiler.compile(stxl.map(s =>
-      s.addScope(outScope, this.context.bindings, ALL_PHASES)
-       .addScope(inScope, this.context.bindings, 0)
-    )));
-
-    return mod;
+    return new SweetModule(compiler.compile(stxl.map(s => s.reduce(new ScopeReducer([
+      { scope: outScope, phase: ALL_PHASES, flip: false },
+      { scope: inScope, phase: 0, flip: false }],
+      this.context.bindings)
+    ))));
   }
 }
 
 function makeLoader(debugStore) {
   let l = new SweetLoader();
   if (debugStore) {
+    // $FlowFixMe: it's fine
     l.normalize = function normalize(name) {
       if (!phaseInModulePathRegexp.test(name)) {
         return `${name}:0`;
       }
       return name;
     };
+    // $FlowFixMe: it's fine
     l.fetch = function fetch({ name, address, metadata }) {
       if (debugStore.has(address.path)) {
         return debugStore.get(address.path);
@@ -135,10 +168,10 @@ function makeLoader(debugStore) {
   return l;
 }
 
-export function load(entryPath, debugStore) {
+export function load(entryPath: string, debugStore: any) {
   return makeLoader(debugStore).load(entryPath);
 }
 
-export default function compile(entryPath, debugStore) {
+export default function compile(entryPath: string, debugStore: any) {
   return makeLoader(debugStore).compile(entryPath);
 }

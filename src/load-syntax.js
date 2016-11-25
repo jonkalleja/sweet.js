@@ -1,4 +1,3 @@
-// @flow
 import * as S from 'sweet-spec';
 import * as _ from 'ramda';
 import { List } from 'immutable';
@@ -77,15 +76,9 @@ export function evalRuntimeValues(terms, context) {
 
 // (Expression, Context) -> [function]
 export function evalCompiletimeValue(expr: S.Expression, context: any) {
-  let deserializer = makeDeserializer(context.bindings);
   let sandbox = {
-    syntaxQuote: function (strings, ...values) {
-      let ctx = deserializer.read(_.last(values));
-      let reader = new Reader(strings, ctx, _.take(values.length - 1, values));
-      return reader.read();
-    },
-    syntaxTemplate: function(str, ...values) {
-      return replaceTemplate(deserializer.read(str), sanitizeReplacementValues(values));
+    syntaxTemplate: function(ident, ...values) {
+      return replaceTemplate(context.templateMap.get(ident), sanitizeReplacementValues(values));
     }
   };
 

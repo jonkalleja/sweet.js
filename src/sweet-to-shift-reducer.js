@@ -72,4 +72,10 @@ export default class extends Term.CloneReducer {
       arguments: s.arguments.toArray()
     });
   }
+
+  reduceArrayExpression(t: Term, s: { elements: List<any> }) {
+    return new S.ArrayExpression({
+      elements: s.elements.toArray()
+    });
+  }
 }
