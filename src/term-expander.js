@@ -7,7 +7,6 @@ import { serializer } from "./serializer";
 import { Enforester } from "./enforester";
 import { processTemplate } from './template-processor';
 import ASTDispatcher from './ast-dispatcher';
-import ScopeAddingReducer from './scope-adding-reducer';
 import ScopeReducer from './scope-reducer';
 import { gensym } from "./symbol";
 import { VarBindingTransform } from "./transforms";
